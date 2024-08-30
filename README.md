@@ -71,16 +71,16 @@ node . mint BQQcsCCBiQn1aJsrrNzTg4Lm7MMd1PzZHq mint.json 100
 
 ## Bellmap
 
-You may bulk mint bellmap by specifying an address to receive and a start and end bellmap number
+You may bulk mint luckymap by specifying an address to receive and a start and end luckymap number
 
 ```
-node . mint-bellmap <address> <start> <end>
+node . mint-luckymap <address> <start> <end>
 ```
 
 Examples:
 
 ```
-node . mint-bellmap BQQcsCCBiQn1aJsrrNzTg4Lm7MMd1PzZHq 0 100
+node . mint-luckymap BQQcsCCBiQn1aJsrrNzTg4Lm7MMd1PzZHq 0 100
 ```
 
 ## Viewing

@@ -46,8 +46,8 @@ async function main() {
 		} else {
 			await mint()
 		}
-	} else if (cmd == 'mint-bellmap') {
-		await mintBellmap()
+	} else if (cmd == 'mint-luckymap') {
+		await mintLuckymap()
 	} else if (cmd == 'wallet') {
 		await wallet()
 	} else if (cmd == 'server') {
@@ -95,17 +95,39 @@ async function walletSync() {
 
 	console.log('syncing utxos with minepixel.io')
 
-	let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}/utxo`)
-	wallet.utxos = response.data.map((e) => ({
-		txid: e.txid,
-		vout: e.vout,
-		satoshis: e.value,
+	let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}`)
+	console.log("res", response.data.chain_stats)
+	/*wallet.utxos = []; 
+	for(let i in response.data.chain_stats) { 
+	    wallet.utxos.push([i,response.data.chain_stats[i]]); 
+	}; 
+	console.log('res', wallet.utxos)*/
+	/*wallet.utxos = /*response.data json_data.map((e) => ({
+		txid: '0',
+		vout: '0',
+		satoshis: response.data.chain_stats.funded_txo_sum,
 		script: Script(new Address(wallet.address)).toHex()
-	}))
+	}))*/
+
+	let balance = response.data.chain_stats.funded_txo_sum
+
+	/*wallet.utxos = {
+		txid: "0",
+		vout: "0",
+		satoshis: balance,
+		script: Script(new Address(wallet.address)).toHex()
+	}*/
+
+	wallet.utxos =  [{
+		txid: "0",
+		vout: "0",
+		satoshis: response.data.chain_stats.funded_txo_sum,
+		script: Script(new Address(wallet.address)).toHex()
+	}]
 
 	fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, 0, 2))
 
-	let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0)
+	//let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0)
 
 	console.log('balance', balance)
 }
@@ -133,12 +155,14 @@ async function walletSend() {
 	let tx = new Transaction()
 	if (amount) {
 		tx.to(receiver, amount)
+		console.log('tx',tx)
 		fund(wallet, tx)
 	} else {
 		tx.from(wallet.utxos)
 		tx.change(receiver)
 		tx.sign(wallet.privkey)
 	}
+
 
 	await broadcast(tx, true)
 
@@ -168,19 +192,19 @@ async function walletSplit() {
 
 const MAX_SCRIPT_ELEMENT_SIZE = 520
 
-async function mintBellmap() {
+async function mintLuckymap() {
 	const argAddress = process.argv[3]
 	const start = parseInt(process.argv[4], 10)
 	const end = parseInt(process.argv[5], 10)
 	let address = new Address(argAddress)
 
 	for (let i = start; i <= end; i++) {
-		const data = Buffer.from(`${i}.bellmap`, 'utf8')
+		const data = Buffer.from(`${i}.luckymap`, 'utf8')
 		const contentType = 'text/plain'
 
 		let wallet = JSON.parse(fs.readFileSync(WALLET_PATH))
 		let txs = inscribe(wallet, address, contentType, data)
-		console.log(`${i}.bellmap`)
+		console.log(`${i}.luckymap`)
 		await broadcastAll(txs, false)
 	}
 }
@@ -209,6 +233,7 @@ async function mint() {
 	}
 
 	let wallet = JSON.parse(fs.readFileSync(WALLET_PATH))
+	console.log('minting')
 	let txs = inscribe(wallet, address, contentType, data)
 	await broadcastAll(txs, false)
 }
@@ -421,6 +446,8 @@ async function broadcast(tx, retry) {
 		method: 'sendrawtransaction',
 		params: [tx.toString()]
 	}
+
+	console.log('tx', tx)
 
 	const options = {
 		auth: {

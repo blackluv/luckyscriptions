@@ -6,3 +6,4 @@ mints
 pending-*
 yarn.lock
 .pending*
+.wallet11.json
