@@ -93,7 +93,7 @@ async function walletSync() {
 
 	let wallet = JSON.parse(fs.readFileSync(WALLET_PATH))
 
-	console.log('syncing utxos with bells.quark.blue api')
+	console.log('syncing utxos with minepixel.io')
 
 	let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}/utxo`)
 	wallet.utxos = response.data.map((e) => ({
