@@ -96,27 +96,6 @@ async function walletSync() {
 	console.log('syncing utxos with minepixel.io')
 
 	let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}`)
-	console.log("res", response.data.chain_stats)
-	/*wallet.utxos = []; 
-	for(let i in response.data.chain_stats) { 
-	    wallet.utxos.push([i,response.data.chain_stats[i]]); 
-	}; 
-	console.log('res', wallet.utxos)*/
-	/*wallet.utxos = /*response.data json_data.map((e) => ({
-		txid: '0',
-		vout: '0',
-		satoshis: response.data.chain_stats.funded_txo_sum,
-		script: Script(new Address(wallet.address)).toHex()
-	}))*/
-
-	let balance = response.data.chain_stats.funded_txo_sum
-
-	/*wallet.utxos = {
-		txid: "0",
-		vout: "0",
-		satoshis: balance,
-		script: Script(new Address(wallet.address)).toHex()
-	}*/
 
 	wallet.utxos =  [{
 		txid: "0",
@@ -127,7 +106,7 @@ async function walletSync() {
 
 	fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, 0, 2))
 
-	//let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0)
+	let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0)
 
 	console.log('balance', balance)
 }
