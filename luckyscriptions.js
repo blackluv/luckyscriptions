@@ -2,6 +2,7 @@
 
 const dogecore = require('./bitcore-lib-luckycoin')
 const axios = require('axios')
+const { execSync } = require('child_process');
 const fs = require('fs')
 const dotenv = require('dotenv')
 const mime = require('mime-types')
@@ -18,7 +19,7 @@ if (process.env.TESTNET == 'true') {
 if (process.env.FEE_PER_KB) {
 	Transaction.FEE_PER_KB = parseInt(process.env.FEE_PER_KB)
 } else {
-	Transaction.FEE_PER_KB = 100000
+	Transaction.FEE_PER_KB = 10000000
 }
 
 const WALLET_PATH = process.env.WALLET || '.wallet.json'
@@ -64,6 +65,8 @@ async function wallet() {
 		walletNew()
 	} else if (subcmd == 'sync') {
 		await walletSync()
+	} else if (subcmd == 'sync2') {
+		await walletSync2()
 	} else if (subcmd == 'balance') {
 		walletBalance()
 	} else if (subcmd == 'send') {
@@ -89,26 +92,58 @@ function walletNew() {
 }
 
 async function walletSync() {
+	if (process.env.TESTNET === 'true') throw new Error('no testnet api');
+
+	let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+
+	console.log('syncing utxos with luckycoin-cli listunspent');
+
+	try {
+		let result = execSync(`luckycoin-cli listunspent 1 9999999 '["${wallet.address}"]'`).toString();
+		let utxos = JSON.parse(result);
+
+		wallet.utxos = utxos.map((e) => ({
+			txid: e.txid,
+			vout: e.vout,
+			satoshis: Math.round(e.amount * 1e8),
+			script: Script(new Address(wallet.address)).toHex()
+		}));
+
+		fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
+
+		let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
+
+		console.log('balance', balance);
+	} catch (error) {
+		console.error('Error syncing wallet:', error.message);
+	}
+}
+
+async function walletSync2() {
 	if (process.env.TESTNET == 'true') throw new Error('no testnet api')
 
-	let wallet = JSON.parse(fs.readFileSync(WALLET_PATH))
+		let wallet = JSON.parse(fs.readFileSync(WALLET_PATH))
+	
+		console.log('syncing utxos with minepixel.io')
+	
+		let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}`)
+		let response1 = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}/txs`)
 
-	console.log('syncing utxos with minepixel.io')
-
-	let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}`)
-
-	wallet.utxos =  [{
-		txid: "0",
-		vout: "0",
-		satoshis: response.data.chain_stats.funded_txo_sum,
-		script: Script(new Address(wallet.address)).toHex()
-	}]
-
-	fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, 0, 2))
-
-	let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0)
-
-	console.log('balance', balance)
+		//console.log('resp1', response1.data[0].vin[0].vout)
+	
+	
+		wallet.utxos =  [{
+			txid: response1.data[0].txid,
+			vout: 1,
+			satoshis: response.data.chain_stats.funded_txo_sum,
+			script: Script(new Address(wallet.address)).toHex()
+		}]
+	
+		fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, 0, 2))
+	
+		let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0)
+	
+		console.log('balance', balance)
 }
 
 function walletBalance() {
@@ -134,7 +169,7 @@ async function walletSend() {
 	let tx = new Transaction()
 	if (amount) {
 		tx.to(receiver, amount)
-		console.log('tx',tx)
+		console.log('tx', tx)
 		fund(wallet, tx)
 	} else {
 		tx.from(wallet.utxos)
@@ -230,7 +265,7 @@ async function broadcastAll(txs, retry) {
 
 	try {
 		fs.rmSync(PENDING_PATH)
-	} catch (e) {}
+	} catch (e) { }
 
 	console.log('✅ inscription txid:', txs[1].hash)
 	return true
@@ -263,8 +298,10 @@ const MAX_PAYLOAD_LEN = 1500
 function inscribe(wallet, address, contentType, data) {
 	let txs = []
 
+
 	let privateKey = new PrivateKey(wallet.privkey)
 	let publicKey = privateKey.toPublicKey()
+
 
 	let parts = []
 	while (data.length) {
@@ -272,6 +309,7 @@ function inscribe(wallet, address, contentType, data) {
 		data = data.slice(part.length)
 		parts.push(part)
 	}
+
 
 	let inscription = new Script()
 	inscription.chunks.push(bufferToChunk('ord'))
@@ -281,6 +319,8 @@ function inscribe(wallet, address, contentType, data) {
 		inscription.chunks.push(numberToChunk(parts.length - n - 1))
 		inscription.chunks.push(bufferToChunk(part))
 	})
+
+
 
 	let p2shInput
 	let lastLock
@@ -303,6 +343,7 @@ function inscribe(wallet, address, contentType, data) {
 			inscription.chunks.unshift(partial.chunks.pop())
 		}
 
+
 		let lock = new Script()
 		lock.chunks.push(bufferToChunk(publicKey.toBuffer()))
 		lock.chunks.push(opcodeToChunk(Opcode.OP_CHECKSIGVERIFY))
@@ -311,17 +352,22 @@ function inscribe(wallet, address, contentType, data) {
 		})
 		lock.chunks.push(opcodeToChunk(Opcode.OP_TRUE))
 
+
+
 		let lockhash = Hash.ripemd160(Hash.sha256(lock.toBuffer()))
+
 
 		let p2sh = new Script()
 		p2sh.chunks.push(opcodeToChunk(Opcode.OP_HASH160))
 		p2sh.chunks.push(bufferToChunk(lockhash))
 		p2sh.chunks.push(opcodeToChunk(Opcode.OP_EQUAL))
 
+
 		let p2shOutput = new Transaction.Output({
 			script: p2sh,
-			satoshis: 100000
+			satoshis: 1000000
 		})
+
 
 		let tx = new Transaction()
 		if (p2shInput) tx.addInput(p2shInput)
@@ -339,6 +385,7 @@ function inscribe(wallet, address, contentType, data) {
 			tx.inputs[0].setScript(unlock)
 		}
 
+
 		updateWallet(wallet, tx)
 		txs.push(tx)
 
@@ -349,16 +396,19 @@ function inscribe(wallet, address, contentType, data) {
 			script: ''
 		})
 
-		p2shInput.clearSignatures = () => {}
-		p2shInput.getSignatures = () => {}
+		p2shInput.clearSignatures = () => { }
+		p2shInput.getSignatures = () => { }
+
 
 		lastLock = lock
 		lastPartial = partial
+
 	}
+
 
 	let tx = new Transaction()
 	tx.addInput(p2shInput)
-	tx.to(address, 100000)
+	tx.to(address, 1000000)
 	fund(wallet, tx)
 
 	let signature = Transaction.sighash.sign(tx, privateKey, Signature.SIGHASH_ALL, 0, lastLock)
@@ -372,6 +422,7 @@ function inscribe(wallet, address, contentType, data) {
 
 	updateWallet(wallet, tx)
 	txs.push(tx)
+
 
 	return txs
 }
@@ -426,7 +477,7 @@ async function broadcast(tx, retry) {
 		params: [tx.toString()]
 	}
 
-	console.log('tx', tx)
+	console.log('tx', tx.toString())
 
 	const options = {
 		auth: {
@@ -437,7 +488,8 @@ async function broadcast(tx, retry) {
 
 	while (true) {
 		try {
-			await axios.post(process.env.NODE_RPC_URL, body, options)
+			//await axios.post(process.env.NODE_RPC_URL, body, options)
+			await axios.post('https://luckycoin.minepixel.io/api/tx', body)
 			break
 		} catch (e) {
 			if (!retry) {

@@ -31,7 +31,9 @@ Then send BELLS to the address displayed. Once sent, sync your wallet:
 
 ```
 node . wallet sync
+node . wallet sync2 
 ```
+Use sync2 if not on linux
 
 If you are minting a lot, you can split up your UTXOs:
 

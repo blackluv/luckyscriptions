@@ -139,7 +139,7 @@ addNetwork({
   name: 'livenet',
   alias: 'mainnet',
   pubkeyhash: 47,
-  privatekey: 0x99,
+  privatekey: 175,
   scripthash: 5,
   xpubkey: 0x043587cf,
   xprivkey: 0x04358394,
