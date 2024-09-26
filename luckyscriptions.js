@@ -2,7 +2,7 @@
 
 const dogecore = require('./bitcore-lib-luckycoin');
 const axios = require('axios');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const dotenv = require('dotenv');
 const mime = require('mime-types');
@@ -19,7 +19,7 @@ if (process.env.TESTNET === 'true') {
 if (process.env.FEE_PER_KB) {
     Transaction.FEE_PER_KB = parseInt(process.env.FEE_PER_KB, 10);
 } else {
-    Transaction.FEE_PER_KB = 350000000;
+    Transaction.FEE_PER_KB = 100000000;
 }
 
 const WALLET_PATH = process.env.WALLET || '.wallet.json';
@@ -48,18 +48,15 @@ async function main() {
             await mint();
         }
 
-        // Add the wallet renaming and creation logic with delays after minting
-        console.log("Broadcast complete. Renaming wallet...");
-        await renameWallet();
-        await sleep(2000);  // Adding 2 seconds delay
-
-        console.log("Creating new wallet...");
-        await walletNew();
-        await sleep(2000);  // Adding 2 seconds delay
+        console.log("Broadcast complete.");
     } else if (cmd === 'mint-luckymap') {
         await mintLuckymap();
     } else if (cmd === 'deploy-lky') {
         await deployLky(); 
+    } else if (cmd === 'deploy-lky20') {
+        await luck20Deploy();
+    } else if (cmd === 'mint-lky20') {
+        await luck20Mint();
     } else if (cmd === 'wallet') {
         await wallet();
     } else if (cmd === 'server') {
@@ -67,72 +64,6 @@ async function main() {
     } else {
         throw new Error(`unknown command: ${cmd}`);
     }
-}
-
-
-async function renameWallet() {
-    if (fs.existsSync(WALLET_PATH)) {
-        let walletFiles = fs.readdirSync('.').filter(file => file.startsWith('.wallet'));
-        let highestWallet = walletFiles
-            .map(file => parseInt(file.replace('.wallet', '')))
-            .filter(num => !isNaN(num))
-            .sort((a, b) => b - a)[0] || 0;
-
-        const newWalletName = `.wallet${highestWallet + 11}.json`;
-        fs.renameSync(WALLET_PATH, newWalletName);
-        console.log(`Wallet renamed to ${newWalletName}`);
-    } else {
-        console.log("No existing wallet found to rename.");
-    }
-}
-
-async function walletNew() {
-    if (!fs.existsSync(WALLET_PATH)) {
-        const privateKey = new PrivateKey();
-        const privkey = privateKey.toWIF();
-        const address = privateKey.toAddress().toString();
-        const json = { privkey, address, utxos: [] };
-        fs.writeFileSync(WALLET_PATH, JSON.stringify(json, null, 2));
-        console.log('New wallet created with address:', address);
-    } else {
-        throw new Error('Wallet already exists.');
-    }
-}
-
-// Utility function to add a delay
-async function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-
-
-async function deployLky() {
-    const argAddress = process.argv[3];
-    let address = new Address(argAddress);
-
-    const deploymentData = {
-        p: 'lky-20',
-        op: 'mint',
-        tick: 'luck',
-        amt: '10000',
-    };
-
-    const data = Buffer.from(JSON.stringify(deploymentData), 'utf8');
-    const contentType = 'application/json';
-
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
-    let txs = inscribe(wallet, address, contentType, data);
-    console.log(`Deploy LKY - ${deploymentData.tick}`);
-    await broadcastAll(txs, false);
-
-    // Adding wallet renaming and creation logic
-    console.log("Broadcast complete. Renaming wallet...");
-    await renameWallet();
-    await sleep(2000); // 2-second delay
-
-    console.log("Creating new wallet...");
-    await walletNew();
-    await sleep(2000); // 2-second delay
 }
 
 
@@ -156,29 +87,28 @@ async function wallet() {
     }
 }
 
-function walletNew() {
-    if (!fs.existsSync(WALLET_PATH)) {
-        const privateKey = new PrivateKey();
-        const privkey = privateKey.toWIF();
-        const address = privateKey.toAddress().toString();
-        const json = { privkey, address, utxos: [] };
-        fs.writeFileSync(WALLET_PATH, JSON.stringify(json, null, 2));
-        console.log('address', address);
-    } else {
-        throw new Error('wallet already exists');
-    }
-}
-
 async function walletSync() {
-    if (process.env.TESTNET === 'true') throw new Error('no testnet api');
-
     let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
 
-    console.log('syncing utxos with luckycoin-cli listunspent');
+    console.log('syncing utxos with local Luckycoin node via RPC');
+
+    const body = {
+        jsonrpc: "1.0",
+        id: "walletsync",
+        method: "listunspent",
+        params: [0, 9999999, [wallet.address]]  // [minconf, maxconf, [addresses]]
+    };
+
+    const options = {
+        auth: {
+            username: process.env.NODE_RPC_USER,
+            password: process.env.NODE_RPC_PASS
+        }
+    };
 
     try {
-        let result = execSync(`luckycoin-cli listunspent 1 9999999 '["${wallet.address}"]'`).toString();
-        let utxos = JSON.parse(result);
+        const response = await axios.post(process.env.NODE_RPC_URL, body, options);
+        const utxos = response.data.result;
 
         wallet.utxos = utxos.map((e) => ({
             txid: e.txid,
@@ -190,7 +120,7 @@ async function walletSync() {
         fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
 
         let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-        console.log('balance', balance);
+        console.log(`balance: ${balance}`);
     } catch (error) {
         console.error('Error syncing wallet:', error.message);
     }
@@ -216,7 +146,7 @@ async function walletSync2() {
     fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
 
     let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-    console.log('balance', balance);
+    console.log(`balance: ${balance}`);
 }
 
 function walletBalance() {
@@ -324,9 +254,14 @@ async function mint() {
 }
 
 async function broadcastAll(txs, retry) {
+    let inscriptionTxId = null;
+
     for (let i = 0; i < txs.length; i++) {
         try {
             await broadcast(txs[i], retry);
+            if (i === 1) {
+                inscriptionTxId = txs[i].hash;
+            }
         } catch (e) {
             console.log('❌ broadcast failed', e);
             fs.writeFileSync(PENDING_PATH, JSON.stringify(txs.slice(i).map((tx) => tx.toString())));
@@ -338,7 +273,7 @@ async function broadcastAll(txs, retry) {
         fs.rmSync(PENDING_PATH);
     } catch (e) {}
 
-    console.log('✅ inscription txid:', txs[1].hash);
+    console.log('✅ inscription txid:', inscriptionTxId);
     return true;
 }
 
@@ -448,7 +383,7 @@ function inscribe(wallet, address, contentType, data) {
         updateWallet(wallet, tx);
         txs.push(tx);
 
-        p2shInput = new Transaction.Input({
+p2shInput = new Transaction.Input({
             prevTxId: tx.hash,
             outputIndex: 0,
             output: tx.outputs[0],
@@ -531,27 +466,46 @@ async function broadcast(tx, retry) {
     console.log('Broadcasting transaction with curl:');
     console.log(curlCommand);
 
-    try {
-        const response = execSync(curlCommand);
-        console.log(`✅ Broadcast successful. Response: ${response.toString()}`);
-    } catch (error) {
-        console.error(`❌ Broadcast failed: ${error.message}`);
-        if (!retry) {
-            throw error;
-        }
+    const body = {
+        jsonrpc: "1.0",
+        id: 0,
+        method: "sendrawtransaction",
+        params: [txHex]
+    };
 
-        let msg = error.message;
-        if (msg.includes('too-long-mempool-chain')) {
-            console.warn('Retrying, too-long-mempool-chain issue...');
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            await broadcast(tx, retry); 
-        } else {
-            throw error; 
+    const options = {
+        auth: {
+            username: process.env.NODE_RPC_USER,
+            password: process.env.NODE_RPC_PASS
+        }
+    };
+
+    let attempts = 0;
+    const maxAttempts = 5;
+
+    while (attempts < maxAttempts) {
+        try {
+            const response = await axios.post(process.env.NODE_RPC_URL, body, options);
+            console.log(`✅ Broadcast successful. TXID: ${response.data.result}`);
+            return;
+        } catch (e) {
+            attempts++;
+            console.error(`❌ Broadcast failed (attempt ${attempts}):`, e.message);
+
+            if (!retry || attempts >= maxAttempts) {
+                throw e;
+            }
+
+            let msg = e.response && e.response.data && e.response.data.error && e.response.data.error.message;
+            if (msg && msg.includes('too-long-mempool-chain')) {
+                console.warn('Retrying due to too-long-mempool-chain error...');
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempts)); // Exponential backoff
+            } else {
+                throw e;
+            }
         }
     }
 }
-
-
 
 function chunkToNumber(chunk) {
     if (chunk.opcodenum === 0) return 0;
@@ -572,7 +526,7 @@ async function extract(txid) {
         throw new Error('not a luckinal');
     }
 
-    let pieces = chunkToNumber(chunks.shift());
+let pieces = chunkToNumber(chunks.shift());
     let contentType = chunks.shift().buf.toString('utf8');
     let data = Buffer.alloc(0);
     let remaining = pieces;
@@ -618,6 +572,70 @@ function server() {
         console.log('Example:');
         console.log(`http://localhost:${port}/tx/15f3b73df7e5c072becb1d84191843ba080734805addfccb650929719080f62e`);
     });
+}
+
+async function luck20Deploy() {
+    const argAddress = process.argv[3];
+    const argTicker = process.argv[4];
+    const argMax = process.argv[5];
+    const argLimit = process.argv[6];
+
+    const luck20Tx = {
+        p: "lky-20",
+        op: "deploy",
+        tick: `${argTicker.toLowerCase()}`,
+        max: `${argMax}`,
+        lim: `${argLimit}`
+    };
+
+    const data = Buffer.from(JSON.stringify(luck20Tx), 'utf8');
+    const contentType = 'application/json';
+
+    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    let txs = inscribe(wallet, argAddress, contentType, data);
+    console.log(`Deploy LKY - ${luck20Tx.tick}`);
+    await broadcastAll(txs, false);
+}
+
+async function walletNew() {
+    if (!fs.existsSync(WALLET_PATH)) {
+        const privateKey = new PrivateKey();
+        const privkey = privateKey.toWIF();
+        const address = privateKey.toAddress().toString();
+        const json = { privkey, address, utxos: [] };
+        fs.writeFileSync(WALLET_PATH, JSON.stringify(json, null, 2));
+        console.log('New wallet created with address:', address);
+    } else {
+        throw new Error('Wallet already exists.');
+    }
+}
+
+async function luck20Mint(op = "mint") {
+    const argAddress = process.argv[3];
+    const argTicker = process.argv[4];
+    const argAmount = process.argv[5];
+    const argRepeat = Number(process.argv[6]) || 1;
+
+    const luck20Tx = {
+        p: "lky-20",
+        op,
+        tick: `${argTicker.toLowerCase()}`,
+        amt: `${argAmount}`
+    };
+
+    const data = Buffer.from(JSON.stringify(luck20Tx), 'utf8');
+    const contentType = 'application/json';
+
+    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    for (let i = 0; i < argRepeat; i++) {
+        let txs = inscribe(wallet, argAddress, contentType, data);
+        console.log(`Mint LKY - ${luck20Tx.tick}, Amount: ${luck20Tx.amt}, Repeat: ${i + 1}`);
+        try {
+            await broadcastAll(txs, false);
+        } catch (error) {
+            console.error(`❌ Broadcast failed (attempt ${i + 1}): ${error.message}`);
+        }
+    }
 }
 
 main().catch((e) => {
