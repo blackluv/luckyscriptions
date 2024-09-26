@@ -19,7 +19,7 @@ if (process.env.TESTNET === 'true') {
 if (process.env.FEE_PER_KB) {
     Transaction.FEE_PER_KB = parseInt(process.env.FEE_PER_KB, 10);
 } else {
-    Transaction.FEE_PER_KB = 100000000;
+    Transaction.FEE_PER_KB = 350000000;
 }
 
 const WALLET_PATH = process.env.WALLET || '.wallet.json';
@@ -61,20 +61,6 @@ async function main() {
         throw new Error(`unknown command: ${cmd}`);
     }
 }
-
-async function walletNew() {
-    if (!fs.existsSync(WALLET_PATH)) {
-        const privateKey = new PrivateKey();
-        const privkey = privateKey.toWIF();
-        const address = privateKey.toAddress().toString();
-        const json = { privkey, address, utxos: [] };
-        fs.writeFileSync(WALLET_PATH, JSON.stringify(json, null, 2));
-        console.log('New wallet created with address:', address);
-    } else {
-        throw new Error('Wallet already exists.');
-    }
-}
-
 
 async function deployLky() {
     const argAddress = process.argv[3];
@@ -146,7 +132,7 @@ async function walletSync() {
         fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
 
         let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-        console.log('balance', balance);
+        console.log(`balance: ${balance}`);
     } catch (error) {
         console.error('Error syncing wallet:', error.message);
     }
@@ -172,7 +158,7 @@ async function walletSync2() {
     fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
 
     let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-    console.log('balance', balance);
+    console.log(`balance: ${balance}`);
 }
 
 function walletBalance() {
@@ -280,12 +266,14 @@ async function mint() {
 }
 
 async function broadcastAll(txs, retry) {
-    let lastTxId = null;
+    let inscriptionTxId = null;
 
     for (let i = 0; i < txs.length; i++) {
         try {
             await broadcast(txs[i], retry);
-            lastTxId = txs[i].hash;
+            if (i === 1) {
+                inscriptionTxId = txs[i].hash;
+            }
         } catch (e) {
             console.log('❌ broadcast failed', e);
             fs.writeFileSync(PENDING_PATH, JSON.stringify(txs.slice(i).map((tx) => tx.toString())));
@@ -297,7 +285,7 @@ async function broadcastAll(txs, retry) {
         fs.rmSync(PENDING_PATH);
     } catch (e) {}
 
-    console.log('✅ inscription txid:', lastTxId);
+    console.log('✅ inscription txid:', inscriptionTxId);
     return true;
 }
 
@@ -407,7 +395,7 @@ function inscribe(wallet, address, contentType, data) {
         updateWallet(wallet, tx);
         txs.push(tx);
 
-        p2shInput = new Transaction.Input({
+p2shInput = new Transaction.Input({
             prevTxId: tx.hash,
             outputIndex: 0,
             output: tx.outputs[0],
@@ -504,17 +492,26 @@ async function broadcast(tx, retry) {
         }
     };
 
-    while (true) {
+    let attempts = 0;
+    const maxAttempts = 5;
+
+    while (attempts < maxAttempts) {
         try {
             const response = await axios.post(process.env.NODE_RPC_URL, body, options);
             console.log(`✅ Broadcast successful. TXID: ${response.data.result}`);
-            break;
+            return;
         } catch (e) {
-            if (!retry) throw e;
+            attempts++;
+            console.error(`❌ Broadcast failed (attempt ${attempts}):`, e.message);
+
+            if (!retry || attempts >= maxAttempts) {
+                throw e;
+            }
+
             let msg = e.response && e.response.data && e.response.data.error && e.response.data.error.message;
             if (msg && msg.includes('too-long-mempool-chain')) {
-                console.warn('retrying, too-long-mempool-chain');
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                console.warn('Retrying due to too-long-mempool-chain error...');
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempts)); // Exponential backoff
             } else {
                 throw e;
             }
@@ -541,7 +538,7 @@ async function extract(txid) {
         throw new Error('not a luckinal');
     }
 
-    let pieces = chunkToNumber(chunks.shift());
+let pieces = chunkToNumber(chunks.shift());
     let contentType = chunks.shift().buf.toString('utf8');
     let data = Buffer.alloc(0);
     let remaining = pieces;
@@ -589,7 +586,18 @@ function server() {
     });
 }
 
-
+async function walletNew() {
+    if (!fs.existsSync(WALLET_PATH)) {
+        const privateKey = new PrivateKey();
+        const privkey = privateKey.toWIF();
+        const address = privateKey.toAddress().toString();
+        const json = { privkey, address, utxos: [] };
+        fs.writeFileSync(WALLET_PATH, JSON.stringify(json, null, 2));
+        console.log('New wallet created with address:', address);
+    } else {
+        throw new Error('Wallet already exists.');
+    }
+}
 
 main().catch((e) => {
     let reason =
