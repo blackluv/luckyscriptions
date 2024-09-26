@@ -19,7 +19,7 @@ if (process.env.TESTNET === 'true') {
 if (process.env.FEE_PER_KB) {
     Transaction.FEE_PER_KB = parseInt(process.env.FEE_PER_KB, 10);
 } else {
-    Transaction.FEE_PER_KB = 350000000;
+    Transaction.FEE_PER_KB = 100000000;
 }
 
 const WALLET_PATH = process.env.WALLET || '.wallet.json';
@@ -112,15 +112,27 @@ async function wallet() {
 }
 
 async function walletSync() {
-    if (process.env.TESTNET === 'true') throw new Error('no testnet api');
-
     let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
 
-    console.log('syncing utxos with luckycoin-cli listunspent');
+    console.log('syncing utxos with local Luckycoin node via RPC');
+
+    const body = {
+        jsonrpc: "1.0",
+        id: "walletsync",
+        method: "listunspent",
+        params: [0, 9999999, [wallet.address]]  // [minconf, maxconf, [addresses]]
+    };
+
+    const options = {
+        auth: {
+            username: process.env.NODE_RPC_USER,
+            password: process.env.NODE_RPC_PASS
+        }
+    };
 
     try {
-        let result = execSync(`luckycoin-cli listunspent 1 9999999 '["${wallet.address}"]'`).toString();
-        let utxos = JSON.parse(result);
+        const response = await axios.post(process.env.NODE_RPC_URL, body, options);
+        const utxos = response.data.result;
 
         wallet.utxos = utxos.map((e) => ({
             txid: e.txid,
