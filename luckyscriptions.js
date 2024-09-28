@@ -2,8 +2,7 @@
 
 const dogecore = require('./bitcore-lib-luckycoin');
 const axios = require('axios');
-const { execSync, exec } = require('child_process');
-const fs = require('fs');
+const path = require('path');
 const dotenv = require('dotenv');
 const mime = require('mime-types');
 const express = require('express');
@@ -28,9 +27,11 @@ const PENDING_PATH = WALLET_PATH.replace('wallet', 'pending-txs');
 async function main() {
     let cmd = process.argv[2];
 
+    console.log(`Command: ${cmd}`);
+
     if (cmd === 'mint') {
         if (fs.existsSync(PENDING_PATH)) {
-            console.log('found pending-txs.json. rebroadcasting...');
+            console.log('Found pending-txs.json. Rebroadcasting...');
             const txs = JSON.parse(fs.readFileSync(PENDING_PATH));
             await broadcastAll(
                 txs.map((tx) => new Transaction(tx)),
@@ -55,43 +56,17 @@ async function main() {
         await deployLky(); 
     } else if (cmd === 'deploy-lky20') {
         await luck20Deploy();
+    } else if (cmd === 'mint-lky20') {
+        await mintLky20();
     } else if (cmd === 'wallet') {
         await wallet();
     } else if (cmd === 'server') {
         await server();
     } else {
-        throw new Error(`unknown command: ${cmd}`);
+        throw new Error(`Unknown command: ${cmd}`);
     }
 }
 
-async function deployLky() {
-    const argAddress = process.argv[3];
-    let address = new Address(argAddress);
-
-    const deploymentData = {
-        p: 'lky-20',
-        op: 'mint',
-        tick: 'luck',
-        amt: '10000',
-    };
-
-    const data = Buffer.from(JSON.stringify(deploymentData), 'utf8');
-    const contentType = 'application/json';
-
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
-    let txs = inscribe(wallet, address, contentType, data);
-    console.log(`Deploy LKY - ${deploymentData.tick}`);
-    await broadcastAll(txs, false);
-
-    // Adding wallet renaming and creation logic
-    console.log("Broadcast complete. Renaming wallet...");
-    await renameWallet();
-    await sleep(2000); // 2-second delay
-
-    console.log("Creating new wallet...");
-    await walletNew();
-    await sleep(2000); // 2-second delay
-}
 
 async function wallet() {
     const subcmd = process.argv[3];
@@ -109,14 +84,14 @@ async function wallet() {
     } else if (subcmd === 'split') {
         await walletSplit();
     } else {
-        throw new Error(`unknown subcommand: ${subcmd}`);
+        throw new Error(`Unknown subcommand: ${subcmd}`);
     }
 }
 
 async function walletSync() {
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    let wallet = readWallet();
 
-    console.log('syncing utxos with local Luckycoin node via RPC');
+    console.log('Syncing UTXOs with local Luckycoin node via RPC');
 
     const body = {
         jsonrpc: "1.0",
@@ -136,6 +111,9 @@ async function walletSync() {
         const response = await axios.post(process.env.NODE_RPC_URL, body, options);
         const utxos = response.data.result;
 
+        // Commented out the following lines to remove UTXO debugging information
+        // console.log('Fetched UTXOs:', utxos);
+
         wallet.utxos = utxos.map((e) => ({
             txid: e.txid,
             vout: e.vout,
@@ -143,21 +121,23 @@ async function walletSync() {
             script: Script(new Address(wallet.address)).toHex(),
         }));
 
-        fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
+        // console.log('Updated wallet UTXOs:', wallet.utxos);
+
+        writeWallet(wallet);
 
         let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-        console.log(`balance: ${balance}`);
+        console.log(`Balance: ${balance}`);
     } catch (error) {
         console.error('Error syncing wallet:', error.message);
     }
 }
 
 async function walletSync2() {
-    if (process.env.TESTNET === 'true') throw new Error('no testnet api');
+    if (process.env.TESTNET === 'true') throw new Error('No testnet API');
 
     let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
 
-    console.log('syncing utxos with minepixel.io');
+    console.log('Syncing UTXOs with minepixel.io');
 
     let response = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}`);
     let response1 = await axios.get(`https://luckycoin.minepixel.io/api/address/${wallet.address}/txs`);
@@ -172,24 +152,32 @@ async function walletSync2() {
     fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
 
     let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-    console.log(`balance: ${balance}`);
+    console.log(`Balance: ${balance}`);
 }
 
 function walletBalance() {
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    try {
+        let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
 
-    let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-    console.log(wallet.address, balance);
+        let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
+
+        console.log(wallet.address, balance);
+
+        // Optionally, write the wallet back to ensure it's up to date
+        writeWallet(wallet);
+    } catch (error) {
+        console.error(`Failed to read or update wallet: ${error.message}`);
+    }
 }
 
 async function walletSend() {
     const argAddress = process.argv[4];
     const argAmount = process.argv[5];
 
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    let wallet = readWallet();
 
     let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-    if (balance === 0) throw new Error('no funds to send');
+    if (balance === 0) throw new Error('No funds to send');
 
     let receiver = new Address(argAddress);
     let amount = parseInt(argAmount, 10);
@@ -208,15 +196,16 @@ async function walletSend() {
     await broadcast(tx, true);
 
     console.log(tx.hash);
+    writeWallet(wallet);
 }
 
 async function walletSplit() {
     let splits = parseInt(process.argv[4], 10);
 
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    let wallet = readWallet();
 
     let balance = wallet.utxos.reduce((acc, curr) => acc + curr.satoshis, 0);
-    if (balance === 0) throw new Error('no funds to split');
+    if (balance === 0) throw new Error('No funds to split');
 
     let tx = new Transaction();
     tx.from(wallet.utxos);
@@ -229,6 +218,7 @@ async function walletSplit() {
     await broadcast(tx, true);
 
     console.log(tx.hash);
+    writeWallet(wallet);
 }
 
 const MAX_SCRIPT_ELEMENT_SIZE = 520;
@@ -253,6 +243,8 @@ async function mintLuckymap() {
 async function mint() {
     const argAddress = process.argv[3];
     const argContentTypeOrFilename = process.argv[4];
+    console.log(`Minting to address: ${argAddress}`);
+    console.log(`Content type or filename: ${argContentTypeOrFilename}`);
 
     let address = new Address(argAddress);
     let contentType;
@@ -261,22 +253,28 @@ async function mint() {
     if (fs.existsSync(argContentTypeOrFilename)) {
         contentType = mime.contentType(mime.lookup(argContentTypeOrFilename));
         data = fs.readFileSync(argContentTypeOrFilename);
+        console.log(`File found. Content type: ${contentType}`);
     } else {
+        console.error(`File not found: ${argContentTypeOrFilename}`);
         process.exit();
     }
 
     if (data.length === 0) {
-        throw new Error('no data to mint');
+        throw new Error('No data to mint');
     }
 
     if (contentType.length > MAX_SCRIPT_ELEMENT_SIZE) {
-        throw new Error('content type too long');
+        throw new Error('Content type too long');
     }
 
     let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
-    console.log('minting');
+    console.log('Minting transaction...');
     let txs = inscribe(wallet, address, contentType, data);
     await broadcastAll(txs, false);
+
+    // Sync wallet to update balance
+    await walletSync();
+    console.log('Minting complete.');
 }
 
 async function broadcastAll(txs, retry) {
@@ -284,12 +282,14 @@ async function broadcastAll(txs, retry) {
 
     for (let i = 0; i < txs.length; i++) {
         try {
+            console.log(`broadcasting tx ${i + 1} of ${txs.length}`);
             await broadcast(txs[i], retry);
+            console.log(`txid: ${txs[i].hash}`);
             if (i === 1) {
                 inscriptionTxId = txs[i].hash;
             }
         } catch (e) {
-            console.log('❌ broadcast failed', e);
+            console.log('❌ Broadcast failed', e);
             fs.writeFileSync(PENDING_PATH, JSON.stringify(txs.slice(i).map((tx) => tx.toString())));
             process.exit(1);
         }
@@ -299,7 +299,8 @@ async function broadcastAll(txs, retry) {
         fs.rmSync(PENDING_PATH);
     } catch (e) {}
 
-    console.log('✅ inscription txid:', inscriptionTxId);
+    console.log('✅ Inscription txid:', inscriptionTxId);
+    console.log('inscription complete continue to next file.');
     return true;
 }
 
@@ -459,7 +460,7 @@ function fund(wallet, tx) {
     }
 
     if (tx.inputAmount < tx.outputAmount + tx.getFee()) {
-        throw new Error('not enough funds');
+        throw new Error('Not enough funds');
     }
 }
 
@@ -485,12 +486,16 @@ function updateWallet(wallet, tx) {
     });
 }
 
+const { exec } = require('child_process');
+const fs = require('fs');
+
 async function broadcast(tx, retry) {
     const txHex = tx.toString(); // Get raw transaction hex
     const curlCommand = `curl --ssl-no-revoke -X POST -H "Content-Type: text/plain" --data-binary "${txHex}" "https://luckycoin.minepixel.io/api/tx"`;
 
-    console.log('Broadcasting transaction with curl:');
-    console.log(curlCommand);
+    // Redirect curl command output to a log file
+    const logFile = 'broadcast.log';
+    fs.appendFileSync(logFile, `Broadcasting transaction with curl:\n${curlCommand}\n`);
 
     const body = {
         jsonrpc: "1.0",
@@ -549,7 +554,7 @@ async function extract(txid) {
 
     let prefix = chunks.shift().buf.toString('utf8');
     if (prefix !== 'ord') {
-        throw new Error('not a luckinal');
+        throw new Error('Not a luckinal');
     }
 
 let pieces = chunkToNumber(chunks.shift());
@@ -617,7 +622,7 @@ async function luck20Deploy() {
     const data = Buffer.from(JSON.stringify(luck20Tx), 'utf8');
     const contentType = 'application/json';
 
-    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    let wallet = JSON.parse(fs.readFileSync());
     let txs = inscribe(wallet, argAddress, contentType, data);
     console.log(`Deploy LKY - ${luck20Tx.tick}`);
     await broadcastAll(txs, false);
@@ -634,6 +639,52 @@ async function walletNew() {
     } else {
         throw new Error('Wallet already exists.');
     }
+}
+
+async function mintLky20() {
+    const argAddress = process.argv[3];
+    const argTicker = process.argv[4];
+    const argAmount = process.argv[5];
+    const argRepeat = Number(process.argv[6]) || 1;
+
+    const luck20Tx = {
+        p: "lky-20",
+        op: "mint",
+        tick: `${argTicker.toLowerCase()}`,
+        amt: `${argAmount}`
+    };
+
+    const data = Buffer.from(JSON.stringify(luck20Tx), 'utf8');
+    const contentType = 'application/json';
+
+    let wallet = JSON.parse(fs.readFileSync(WALLET_PATH));
+    for (let i = 0; i < argRepeat; i++) {
+        let txs = inscribe(wallet, argAddress, contentType, data);
+        console.log(`Mint LKY - ${luck20Tx.tick}, Amount: ${luck20Tx.amt}, Repeat: ${i + 1}`);
+        try {
+            await broadcastAll(txs, false);
+        } catch (error) {
+            console.error(`❌ Broadcast failed (attempt ${i + 1}): ${error.message}`);
+        }
+    }
+
+    // Sync wallet to update balance
+    await walletSync();
+}
+
+function writeWallet(wallet) {
+    try {
+        console.log(`Writing wallet to: ${WALLET_PATH}`);
+        fs.writeFileSync(WALLET_PATH, JSON.stringify(wallet, null, 2));
+        console.log(`Wallet updated: ${WALLET_PATH}`);
+    } catch (error) {
+        console.error(`Failed to write wallet: ${error.message}`);
+    }
+}
+
+function readWallet() {
+    console.log(`Reading wallet from: ${WALLET_PATH}`);
+    return JSON.parse(fs.readFileSync(WALLET_PATH));
 }
 
 main().catch((e) => {
