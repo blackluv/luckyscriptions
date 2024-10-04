@@ -115,7 +115,7 @@ There's a problem with the node connection. Your `dogecoin.conf` file should loo
 
     rpcuser=ape
     rpcpassword=zord
-    rpcport=9332
+    rpcport=9917
     server=1
 
 *Make sure `port` is not set to the same number as `rpcport`. Also make sure `rpcauth` is not set.*
